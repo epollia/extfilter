@@ -16,9 +16,14 @@ use Log::Log4perl;
 use Net::IP qw(:PROC);
 use Encode;
 use Net::CIDR::Lite;
+use Fcntl qw(:flock);
 
 binmode(STDOUT,':utf8');
 binmode(STDERR,':utf8');
+
+open our $file_flock, '<', $0 or die $!;
+flock $file_flock, LOCK_EX|LOCK_NB or die "Unable to lock file $!";
+#exit(1);
 
 my $dir = File::Basename::dirname($0);
 
@@ -33,6 +38,7 @@ my $db_host = $Config->{'DB.host'} || die "DB.host not defined.";
 my $db_user = $Config->{'DB.user'} || die "DB.user not defined.";
 my $db_pass = $Config->{'DB.password'} || die "DB.password not defined.";
 my $db_name = $Config->{'DB.name'} || die "DB.name not defined.";
+my $db_hostname = $Config->{'DB.hostname'} || die "DB.hostname not defined.";
 
 # пути к генерируемым файлам:
 my $domains_file = $Config->{'APP.domains'} || "";
@@ -53,6 +59,25 @@ my $nets_to_hosts = lc($Config->{'APP.nets_to_hosts'} || "false");
 my $dbh = DBI->connect("DBI:mysql:database=".$db_name.";host=".$db_host,$db_user,$db_pass,{mysql_enable_utf8 => 1}) or die DBI->errstr;
 $dbh->do("set names utf8");
 
+my $lastUpdateConfig = '0';
+my $lastActionDate = '0';
+my $sth = $dbh->prepare("SELECT param, value FROM zap2_settings");
+$sth->execute or die DBI->errstr;
+while(my $ips = $sth->fetchrow_hashref()) {
+    my $param=$ips->{param};
+    my $value=$ips->{value};
+    if($param eq $db_hostname) {
+	$lastUpdateConfig = $value;
+    }
+    if($param eq 'lastActionDate') {
+	$lastActionDate = $value;
+    }
+}
+$sth->finish();
+if ($lastUpdateConfig >= $lastActionDate ) {
+    print("Not need update config\n");
+    exit(1);
+    }
 
 my $domains=0;
 my $only_ip=0;
@@ -88,7 +113,7 @@ my %hosts;
 
 my %domains;
 
-my $sth = $dbh->prepare("SELECT * FROM zap2_domains WHERE domain like '*.%'");
+$sth = $dbh->prepare("SELECT * FROM zap2_domains WHERE domain like '*.%'");
 $sth->execute();
 while (my $ips = $sth->fetchrow_hashref())
 {
@@ -296,7 +321,6 @@ close $HOSTS_FILE;
 close $PROTOS_FILE;
 close $SSL_IPS_FILE;
 
-$dbh->disconnect();
 
 my $domains_file_hash=get_md5_sum($domains_file);
 my $urls_file_hash=get_md5_sum($urls_file);
@@ -314,7 +338,26 @@ if($domains_file_hash ne $domains_file_hash_old || $urls_file_hash ne $urls_file
 	$logger->info("Extfilter successfully reloaded/restarted!");
 }
 
+setParam($db_hostname, $lastActionDate);
+$dbh->disconnect();
+
 exit 0;
+
+sub setParam
+{
+    my $param = shift;
+    my $value = shift;
+    my $sth = $dbh->prepare("INSERT INTO zap2_settings (param, value) VALUES(?, ?) ON DUPLICATE KEY UPDATE value = ?");
+    $sth->bind_param(1, $param);
+    $sth->bind_param(2, $value);
+    $sth->bind_param(3, $value);
+    $sth->execute() or die DBI->errstr;
+}
+
+
+
+
+
 
 sub get_md5_sum
 {
