@@ -561,6 +561,20 @@ sub ips_to_hosts
 		}
 	}
 	$sth->finish();
+	$sth = $dbh->prepare("SELECT ip FROM zap2_ips_custom_contet_id");
+	$sth->execute;
+	while (my $ips = $sth->fetchrow_hashref())
+	{
+		my $ip = get_ip($ips->{ip});
+		if($ip =~ /^(\d{1,3}\.){3}\d{1,3}$/)
+		{
+			$ip_cidr->add_any($ip);
+		} else {
+			$ip6_cidr->add_any($ip);
+		}
+	}
+	$sth->finish();
+	
 	foreach my $ip (@{$ip_cidr->list()})
 	{
 		print $HOSTS_FILE "$ip", ", 6/0xfe", "\n";
